@@ -1,0 +1,516 @@
+<!DOCTYPE html>
+<html lang="uk">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>YT Downloader</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500&display=swap" rel="stylesheet">
+  <style>
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    :root {
+      --bg: #0a0a0a;
+      --surface: #111111;
+      --border: #222222;
+      --red: #ff2d2d;
+      --red-dim: #7a1414;
+      --white: #f0ede8;
+      --muted: #555555;
+      --success: #2dff7a;
+    }
+
+    body {
+      background: var(--bg);
+      color: var(--white);
+      font-family: 'DM Sans', sans-serif;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      padding: 60px 20px 80px;
+      overflow-x: hidden;
+    }
+
+    /* ── Background grain ── */
+    body::before {
+      content: '';
+      position: fixed;
+      inset: 0;
+      background-image: url("data:image/svg+xml,%3Csvg viewBox='0 0 200 200' xmlns='http://www.w3.org/2000/svg'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='0.9' numOctaves='4' stitchTiles='stitch'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)' opacity='0.035'/%3E%3C/svg%3E");
+      pointer-events: none;
+      z-index: 0;
+    }
+
+    .container { position: relative; z-index: 1; width: 100%; max-width: 680px; }
+
+    /* ── Header ── */
+    header { margin-bottom: 56px; }
+
+    .logo {
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: clamp(64px, 12vw, 96px);
+      line-height: 0.9;
+      letter-spacing: -1px;
+      color: var(--white);
+    }
+
+    .logo span { color: var(--red); }
+
+    .tagline {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      letter-spacing: 3px;
+      text-transform: uppercase;
+      margin-top: 10px;
+    }
+
+    /* ── Card ── */
+    .card {
+      background: var(--surface);
+      border: 1px solid var(--border);
+      padding: 36px;
+    }
+
+    /* ── URL Input row ── */
+    .url-row {
+      display: flex;
+      gap: 0;
+      border: 1px solid var(--border);
+      transition: border-color .2s;
+    }
+    .url-row:focus-within { border-color: var(--red); }
+
+    #url-input {
+      flex: 1;
+      background: transparent;
+      border: none;
+      outline: none;
+      color: var(--white);
+      font-family: 'DM Mono', monospace;
+      font-size: 13px;
+      padding: 14px 16px;
+    }
+
+    #url-input::placeholder { color: var(--muted); }
+
+    #fetch-btn {
+      background: var(--red);
+      border: none;
+      color: #fff;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 18px;
+      letter-spacing: 1px;
+      padding: 0 24px;
+      cursor: pointer;
+      transition: background .15s;
+      white-space: nowrap;
+    }
+    #fetch-btn:hover { background: #e02020; }
+    #fetch-btn:disabled { background: var(--red-dim); cursor: not-allowed; }
+
+    /* ── Preview ── */
+    #preview {
+      display: none;
+      margin-top: 28px;
+      gap: 20px;
+      align-items: flex-start;
+    }
+    #preview.visible { display: flex; }
+
+    #thumb {
+      width: 140px;
+      min-width: 140px;
+      aspect-ratio: 16/9;
+      object-fit: cover;
+      border: 1px solid var(--border);
+    }
+
+    .preview-meta { flex: 1; overflow: hidden; }
+
+    .video-title {
+      font-size: 15px;
+      font-weight: 500;
+      line-height: 1.4;
+      color: var(--white);
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .video-sub {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+      margin-top: 6px;
+    }
+
+    /* ── Quality selector ── */
+    .section-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      letter-spacing: 2px;
+      text-transform: uppercase;
+      color: var(--muted);
+      margin: 28px 0 12px;
+    }
+
+    .quality-grid {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+    }
+
+    .q-btn {
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--muted);
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      padding: 8px 16px;
+      cursor: pointer;
+      transition: all .15s;
+    }
+    .q-btn:hover { border-color: var(--white); color: var(--white); }
+    .q-btn.active { border-color: var(--red); color: var(--red); background: rgba(255,45,45,.06); }
+
+    /* ── Download button ── */
+    #download-btn {
+      width: 100%;
+      margin-top: 28px;
+      background: var(--red);
+      border: none;
+      color: #fff;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 22px;
+      letter-spacing: 2px;
+      padding: 16px;
+      cursor: pointer;
+      transition: background .15s, opacity .15s;
+      display: none;
+    }
+    #download-btn.visible { display: block; }
+    #download-btn:hover { background: #e02020; }
+    #download-btn:disabled { opacity: .4; cursor: not-allowed; }
+
+    /* ── Progress ── */
+    #progress-block {
+      display: none;
+      margin-top: 28px;
+    }
+    #progress-block.visible { display: block; }
+
+    .progress-bar-wrap {
+      height: 3px;
+      background: var(--border);
+      position: relative;
+      overflow: hidden;
+    }
+
+    #progress-fill {
+      height: 100%;
+      background: var(--red);
+      width: 0%;
+      transition: width .3s;
+    }
+
+    .progress-row {
+      display: flex;
+      justify-content: space-between;
+      margin-top: 10px;
+    }
+
+    #progress-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--white);
+    }
+
+    #speed-label {
+      font-family: 'DM Mono', monospace;
+      font-size: 11px;
+      color: var(--muted);
+    }
+
+    /* ── Done ── */
+    #done-block {
+      display: none;
+      margin-top: 28px;
+      border: 1px solid var(--success);
+      padding: 20px 24px;
+      align-items: center;
+      gap: 16px;
+    }
+    #done-block.visible { display: flex; }
+
+    .done-icon { font-size: 28px; }
+
+    .done-text p { font-size: 14px; font-weight: 500; }
+    .done-text span { font-family: 'DM Mono', monospace; font-size: 11px; color: var(--muted); }
+
+    #save-btn {
+      margin-left: auto;
+      background: var(--success);
+      border: none;
+      color: #000;
+      font-family: 'Bebas Neue', sans-serif;
+      font-size: 17px;
+      letter-spacing: 1px;
+      padding: 10px 22px;
+      cursor: pointer;
+      white-space: nowrap;
+      transition: opacity .15s;
+    }
+    #save-btn:hover { opacity: .85; }
+
+    /* ── Error ── */
+    #error-block {
+      display: none;
+      margin-top: 20px;
+      border: 1px solid var(--red-dim);
+      background: rgba(255,45,45,.04);
+      padding: 14px 18px;
+    }
+    #error-block.visible { display: block; }
+    #error-text {
+      font-family: 'DM Mono', monospace;
+      font-size: 12px;
+      color: var(--red);
+    }
+
+    /* ── Footer ── */
+    footer {
+      margin-top: 48px;
+      font-family: 'DM Mono', monospace;
+      font-size: 10px;
+      color: var(--muted);
+      letter-spacing: 1px;
+      text-align: center;
+    }
+
+    /* ── Spinner inside fetch btn ── */
+    @keyframes spin { to { transform: rotate(360deg); } }
+    .spinner {
+      display: inline-block;
+      width: 14px; height: 14px;
+      border: 2px solid rgba(255,255,255,.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin .6s linear infinite;
+      vertical-align: middle;
+    }
+
+    @keyframes fadeIn { from { opacity:0; transform:translateY(6px); } to { opacity:1; transform:none; } }
+    .fade-in { animation: fadeIn .25s ease forwards; }
+  </style>
+</head>
+<body>
+
+<div class="container">
+  <header>
+    <div class="logo">YT<span>.</span>DOWN</div>
+    <div class="tagline">Завантажте відео з YouTube на ПК</div>
+  </header>
+
+  <div class="card">
+    <!-- URL Input -->
+    <div class="url-row">
+      <input id="url-input" type="text" placeholder="https://youtube.com/watch?v=..." autocomplete="off" spellcheck="false"/>
+      <button id="fetch-btn" onclick="fetchInfo()">АНАЛІЗ</button>
+    </div>
+
+    <!-- Video Preview -->
+    <div id="preview">
+      <img id="thumb" src="" alt="thumbnail"/>
+      <div class="preview-meta">
+        <div class="video-title" id="video-title"></div>
+        <div class="video-sub" id="video-meta"></div>
+      </div>
+    </div>
+
+    <!-- Quality -->
+    <div id="quality-section" style="display:none">
+      <div class="section-label">Якість</div>
+      <div class="quality-grid">
+        <button class="q-btn active" data-q="best"   onclick="setQ(this)">Найкраща</button>
+        <button class="q-btn"        data-q="1080"   onclick="setQ(this)">1080p</button>
+        <button class="q-btn"        data-q="720"    onclick="setQ(this)">720p</button>
+        <button class="q-btn"        data-q="480"    onclick="setQ(this)">480p</button>
+        <button class="q-btn"        data-q="360"    onclick="setQ(this)">360p</button>
+        <button class="q-btn"        data-q="audio"  onclick="setQ(this)">MP3 аудіо</button>
+      </div>
+    </div>
+
+    <!-- Start download -->
+    <button id="download-btn" onclick="startDownload()">⬇ ЗАВАНТАЖИТИ</button>
+
+    <!-- Progress -->
+    <div id="progress-block">
+      <div class="progress-bar-wrap"><div id="progress-fill"></div></div>
+      <div class="progress-row">
+        <span id="progress-label">Підготовка…</span>
+        <span id="speed-label"></span>
+      </div>
+    </div>
+
+    <!-- Done -->
+    <div id="done-block">
+      <div class="done-icon">✓</div>
+      <div class="done-text">
+        <p>Відео готове!</p>
+        <span id="done-name"></span>
+      </div>
+      <button id="save-btn" onclick="saveFile()">ЗБЕРЕГТИ</button>
+    </div>
+
+    <!-- Error -->
+    <div id="error-block">
+      <div id="error-text"></div>
+    </div>
+  </div>
+
+  <footer>Для особистого використання · Поважайте авторські права</footer>
+</div>
+
+<script>
+  let currentJobId = null;
+  let pollTimer = null;
+  let selectedQuality = 'best';
+
+  const $ = id => document.getElementById(id);
+
+  function setQ(btn) {
+    document.querySelectorAll('.q-btn').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+    selectedQuality = btn.dataset.q;
+  }
+
+  function showError(msg) {
+    $('error-text').textContent = '⚠ ' + msg;
+    $('error-block').classList.add('visible');
+  }
+
+  function hideError() { $('error-block').classList.remove('visible'); }
+
+  async function fetchInfo() {
+    const url = $('url-input').value.trim();
+    if (!url) return;
+
+    hideError();
+    $('preview').classList.remove('visible');
+    $('quality-section').style.display = 'none';
+    $('download-btn').classList.remove('visible');
+    $('done-block').classList.remove('visible');
+    $('progress-block').classList.remove('visible');
+
+    const btn = $('fetch-btn');
+    btn.disabled = true;
+    btn.innerHTML = '<span class="spinner"></span>';
+
+    try {
+      const res = await fetch('/api/info', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url })
+      });
+      const data = await res.json();
+
+      if (data.error) { showError(data.error); return; }
+
+      $('thumb').src = data.thumbnail || '';
+      $('video-title').textContent = data.title || '';
+      $('video-meta').textContent = [data.uploader, data.duration].filter(Boolean).join(' · ');
+
+      $('preview').classList.add('visible', 'fade-in');
+      $('quality-section').style.display = 'block';
+      $('download-btn').classList.add('visible');
+
+    } catch (e) {
+      showError('Не вдалось отримати інформацію про відео.');
+    } finally {
+      btn.disabled = false;
+      btn.textContent = 'АНАЛІЗ';
+    }
+  }
+
+  async function startDownload() {
+    const url = $('url-input').value.trim();
+    if (!url) return;
+
+    hideError();
+    $('done-block').classList.remove('visible');
+    $('progress-fill').style.width = '0%';
+    $('progress-label').textContent = 'Запуск…';
+    $('speed-label').textContent = '';
+    $('progress-block').classList.add('visible');
+    $('download-btn').disabled = true;
+
+    try {
+      const res = await fetch('/api/download', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url, quality: selectedQuality })
+      });
+      const data = await res.json();
+      if (data.error) { showError(data.error); return; }
+
+      currentJobId = data.job_id;
+      pollProgress();
+
+    } catch (e) {
+      showError('Помилка запуску завантаження.');
+      $('download-btn').disabled = false;
+    }
+  }
+
+  function pollProgress() {
+    if (pollTimer) clearInterval(pollTimer);
+    pollTimer = setInterval(async () => {
+      try {
+        const res = await fetch(`/api/progress/${currentJobId}`);
+        const job = await res.json();
+
+        $('progress-fill').style.width = job.progress + '%';
+
+        const labels = {
+          queued: 'У черзі…',
+          downloading: `Завантаження… ${job.progress}%`,
+          processing: 'Обробка файлу…',
+          done: 'Готово!',
+          error: 'Помилка'
+        };
+        $('progress-label').textContent = labels[job.status] || job.status;
+        if (job.speed) $('speed-label').textContent = job.speed;
+
+        if (job.status === 'done') {
+          clearInterval(pollTimer);
+          $('progress-block').classList.remove('visible');
+          $('done-block').classList.add('visible', 'fade-in');
+          $('done-name').textContent = (job.title || 'відео') + (selectedQuality === 'audio' ? '.mp3' : '.mp4');
+          $('download-btn').disabled = false;
+        }
+
+        if (job.status === 'error') {
+          clearInterval(pollTimer);
+          $('progress-block').classList.remove('visible');
+          showError(job.error || 'Невідома помилка');
+          $('download-btn').disabled = false;
+        }
+      } catch { /* ignore transient fetch errors */ }
+    }, 800);
+  }
+
+  function saveFile() {
+    if (!currentJobId) return;
+    window.location.href = `/api/file/${currentJobId}`;
+  }
+
+  // Allow pressing Enter in input
+  $('url-input').addEventListener('keydown', e => {
+    if (e.key === 'Enter') fetchInfo();
+  });
+</script>
+</body>
+</html>
