@@ -1,68 +1,82 @@
 import os
-from flask import Flask, jsonify, render_template, request
+import io
+from flask import Flask, jsonify, render_template, request, Response
 from flask_cors import CORS
-import urllib.request
-import urllib.parse
-import json
+from pytubefix import YouTube
+from pytubefix.cli import on_progress
 
 app = Flask(__name__)
 CORS(app)
-
-COBALT_API = "https://api.cobalt.tools"
 
 @app.get("/")
 def index():
     return render_template("index.html")
 
 
-@app.post("/api/download")
-def get_download_link():
+@app.post("/api/info")
+def get_info():
     data = request.get_json(force=True)
     url = (data or {}).get("url", "").strip()
-    quality = (data or {}).get("quality", "1080")
+    if not url:
+        return jsonify({"error": "URL не вказано"}), 400
+    try:
+        yt = YouTube(url, use_po_token=True)
+        return jsonify({
+            "title": yt.title,
+            "thumbnail": yt.thumbnail_url,
+            "duration": str(yt.length) + " сек",
+            "author": yt.author,
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 400
+
+
+@app.post("/api/download")
+def download():
+    data = request.get_json(force=True)
+    url = (data or {}).get("url", "").strip()
+    quality = (data or {}).get("quality", "720p")
     audio_only = (data or {}).get("audio_only", False)
 
     if not url:
         return jsonify({"error": "URL не вказано"}), 400
 
-    payload = {
-        "url": url,
-        "videoQuality": quality,
-        "filenameStyle": "pretty",
-    }
-
-    if audio_only:
-        payload["downloadMode"] = "audio"
-    else:
-        payload["downloadMode"] = "auto"
-
     try:
-        req_data = json.dumps(payload).encode("utf-8")
-        req = urllib.request.Request(
-            f"{COBALT_API}/",
-            data=req_data,
-            headers={
-                "Content-Type": "application/json",
-                "Accept": "application/json",
-            },
-            method="POST"
-        )
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            result = json.loads(resp.read().decode("utf-8"))
+        yt = YouTube(url, use_po_token=True)
 
-        # cobalt returns: {status, url} or {status, picker} or {status, error}
-        status = result.get("status")
-
-        if status in ("redirect", "stream", "tunnel"):
-            return jsonify({"url": result.get("url"), "filename": result.get("filename", "video.mp4")})
-        elif status == "picker":
-            # multiple streams — return first
-            first = result.get("picker", [{}])[0]
-            return jsonify({"url": first.get("url"), "filename": "video.mp4"})
+        if audio_only:
+            stream = yt.streams.get_audio_only()
+            ext = "mp3"
+            mime = "audio/mpeg"
         else:
-            err = result.get("error", {})
-            msg = err.get("code", "Невідома помилка") if isinstance(err, dict) else str(err)
-            return jsonify({"error": msg}), 400
+            # Try to get progressive stream (video+audio in one file)
+            res = quality if quality != "best" else None
+            if res:
+                stream = yt.streams.filter(progressive=True, res=res).first()
+            if not stream:
+                stream = yt.streams.filter(progressive=True).order_by("resolution").last()
+            ext = "mp4"
+            mime = "video/mp4"
+
+        if not stream:
+            return jsonify({"error": "Потрібний формат недоступний"}), 400
+
+        # Stream file directly to browser
+        buf = io.BytesIO()
+        stream.stream_to_buffer(buf)
+        buf.seek(0)
+
+        safe_title = "".join(c for c in yt.title if c.isalnum() or c in " -_").strip()
+        filename = f"{safe_title}.{ext}"
+
+        return Response(
+            buf,
+            mimetype=mime,
+            headers={
+                "Content-Disposition": f'attachment; filename="{filename}"',
+                "Content-Length": buf.getbuffer().nbytes,
+            }
+        )
 
     except Exception as e:
         return jsonify({"error": str(e)}), 500
