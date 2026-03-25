@@ -1,10 +1,8 @@
 import os
-import io
 import threading
 import uuid
-import json
 
-from flask import Flask, jsonify, render_template, request, send_file, Response
+from flask import Flask, jsonify, render_template, request, send_file
 from flask_cors import CORS
 import yt_dlp
 
@@ -14,16 +12,14 @@ CORS(app)
 DOWNLOAD_DIR = "downloads"
 os.makedirs(DOWNLOAD_DIR, exist_ok=True)
 
-jobs = {}  # job_id -> {status, file_path, error, title}
+jobs = {}
 
-# yt-dlp options that bypass bot detection without cookies
 BASE_OPTS = {
     "quiet": True,
     "no_warnings": True,
     "extractor_args": {
         "youtube": {
             "player_client": ["web_creator", "ios"],
-            "player_skip": ["webpage"],
         }
     },
     "http_headers": {
@@ -32,64 +28,55 @@ BASE_OPTS = {
 }
 
 
-def get_ydl_opts(quality: str, job_id: str) -> dict:
-    out = str(os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s"))
-
-    fmt_map = {
-        "720": "bestvideo[height<=720][ext=mp4]+bestaudio[ext=m4a]/best[height<=720][ext=mp4]/best[height<=720]",
-        "480": "bestvideo[height<=480][ext=mp4]+bestaudio[ext=m4a]/best[height<=480]",
-        "360": "bestvideo[height<=360][ext=mp4]+bestaudio[ext=m4a]/best[height<=360]",
-        "audio": "bestaudio[ext=m4a]/bestaudio",
-    }
-    fmt = fmt_map.get(quality, fmt_map["720"])
-
-    postprocessors = []
-    if quality == "audio":
-        postprocessors.append({
-            "key": "FFmpegExtractAudio",
-            "preferredcodec": "mp3",
-            "preferredquality": "192",
-        })
-    else:
-        postprocessors.append({"key": "FFmpegVideoConvertor", "preferedformat": "mp4"})
-
-    def progress_hook(d):
-        if d["status"] == "downloading":
-            total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
-            done = d.get("downloaded_bytes", 0)
-            jobs[job_id]["progress"] = int(done / total * 100) if total else 0
-        elif d["status"] == "finished":
-            jobs[job_id]["progress"] = 95
-
-    opts = {**BASE_OPTS}
-    opts.update({
-        "format": fmt,
-        "outtmpl": out,
-        "merge_output_format": "mp4",
-        "postprocessors": postprocessors,
-        "progress_hooks": [progress_hook],
-    })
-    return opts
-
-
 def download_worker(job_id: str, url: str, quality: str):
     try:
-        opts = get_ydl_opts(quality, job_id)
+        out = os.path.join(DOWNLOAD_DIR, f"{job_id}.%(ext)s")
+
+        if quality == "audio":
+            # Audio only - no FFmpeg needed, just download m4a
+            fmt = "bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio"
+        else:
+            # Progressive = video+audio already merged, no FFmpeg needed
+            # These go up to 720p on most videos
+            height = quality.replace("p", "")
+            fmt = (
+                f"best[height<={height}][ext=mp4]"
+                f"/best[height<={height}]"
+                f"/best[ext=mp4]"
+                f"/best"
+            )
+
+        def hook(d):
+            if d["status"] == "downloading":
+                total = d.get("total_bytes") or d.get("total_bytes_estimate") or 0
+                done = d.get("downloaded_bytes", 0)
+                jobs[job_id]["progress"] = int(done / total * 100) if total else 0
+            elif d["status"] == "finished":
+                jobs[job_id]["progress"] = 99
+
+        opts = {**BASE_OPTS, "format": fmt, "outtmpl": out, "progress_hooks": [hook]}
+
         with yt_dlp.YoutubeDL(opts) as ydl:
             info = ydl.extract_info(url, download=True)
             title = info.get("title", "video")
-            ext = "mp3" if quality == "audio" else "mp4"
 
-        # Find downloaded file
+        # Find file
+        file_path = None
         for f in os.listdir(DOWNLOAD_DIR):
             if f.startswith(job_id):
-                jobs[job_id]["file_path"] = os.path.join(DOWNLOAD_DIR, f)
+                file_path = os.path.join(DOWNLOAD_DIR, f)
                 break
 
-        jobs[job_id]["status"] = "done"
-        jobs[job_id]["progress"] = 100
-        jobs[job_id]["title"] = title
-        jobs[job_id]["ext"] = ext
+        if not file_path or os.path.getsize(file_path) < 1000:
+            raise Exception("Файл не завантажився або пошкоджений")
+
+        jobs[job_id].update({
+            "status": "done",
+            "progress": 100,
+            "title": title,
+            "file_path": file_path,
+            "ext": os.path.splitext(file_path)[1].lstrip("."),
+        })
 
     except Exception as e:
         jobs[job_id]["status"] = "error"
@@ -108,8 +95,7 @@ def get_info():
     if not url:
         return jsonify({"error": "URL не вказано"}), 400
     try:
-        opts = {**BASE_OPTS}
-        with yt_dlp.YoutubeDL(opts) as ydl:
+        with yt_dlp.YoutubeDL(BASE_OPTS) as ydl:
             info = ydl.extract_info(url, download=False)
         return jsonify({
             "title": info.get("title"),
@@ -125,17 +111,14 @@ def get_info():
 def start_download():
     data = request.get_json(force=True)
     url = (data or {}).get("url", "").strip()
-    quality = (data or {}).get("quality", "720")
-
+    quality = (data or {}).get("quality", "720p")
     if not url:
         return jsonify({"error": "URL не вказано"}), 400
 
     job_id = uuid.uuid4().hex[:12]
     jobs[job_id] = {"status": "downloading", "progress": 0, "file_path": None, "error": None}
 
-    t = threading.Thread(target=download_worker, args=(job_id, url, quality), daemon=True)
-    t.start()
-
+    threading.Thread(target=download_worker, args=(job_id, url, quality), daemon=True).start()
     return jsonify({"job_id": job_id})
 
 
@@ -150,17 +133,15 @@ def get_progress(job_id):
 @app.get("/api/file/<job_id>")
 def serve_file(job_id):
     job = jobs.get(job_id)
-    if not job or job["status"] != "done" or not job.get("file_path"):
-        return jsonify({"error": "File not ready"}), 404
+    if not job or job["status"] != "done":
+        return jsonify({"error": "Not ready"}), 404
 
-    path = job["file_path"]
-    if not os.path.exists(path):
+    path = job.get("file_path")
+    if not path or not os.path.exists(path):
         return jsonify({"error": "File missing"}), 404
 
-    title = job.get("title", "video")
-    safe = "".join(c for c in title if c.isalnum() or c in " -_").strip()
+    safe = "".join(c for c in job.get("title", "video") if c.isalnum() or c in " -_").strip()
     ext = job.get("ext", "mp4")
-
     return send_file(path, as_attachment=True, download_name=f"{safe}.{ext}")
 
 
